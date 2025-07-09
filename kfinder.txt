@@ -1,0 +1,387 @@
+import tkinter as tk
+from tkinter import filedialog, scrolledtext, messagebox, ttk
+import os
+import re
+from collections import defaultdict
+import datetime
+
+# Bu kısımlar PDF, Word, Excel için. Eğer kurduysan yorum satırından çıkarabilirsin.
+# pip install PyPDF2
+# from PyPDF2 import PdfReader
+# pip install python-docx
+# from docx import Document
+# pip install openpyxl
+# from openpyxl import load_workbook
+
+class FileSearchApp:
+    def __init__(self, master):
+        self.master = master
+        master.title("kfinder - Dosya ve İçerik Arama Uygulaması") # Uygulama başlığı
+        master.geometry("800x700")
+        master.resizable(False, False)
+
+        self.style = ttk.Style()
+        self.style.theme_use('clam')
+        self.style.configure('TFrame', background='#e0e0e0')
+        self.style.configure('TLabel', background='#e0e0e0', font=('Arial', 10))
+        self.style.configure('TButton', font=('Arial', 10, 'bold'), padding=5)
+        self.style.configure('TCheckbutton', background='#e0e0e0', font=('Arial', 9))
+        self.style.configure('TLabelframe', background='#e0e0e0', font=('Arial', 11, 'bold'))
+        self.style.configure('TLabelframe.Label', background='#e0e0e0', foreground='#333333')
+        self.style.configure('kfinder.TLabel', background='#e0e0e0', foreground='#4CAF50', font=('Arial', 18, 'bold italic')) # kfinder etiketi için stil
+
+        # kfinder etiketi - Sağ üst köşeye yakın bir yere
+        kfinder_label = ttk.Label(master, text="kfinder", style='kfinder.TLabel')
+        kfinder_label.place(relx=0.98, rely=0.01, anchor='ne') # Sağ üste yerleştir
+
+        settings_frame = ttk.LabelFrame(master, text=" Arama Ayarları ")
+        settings_frame.pack(pady=10, padx=15, fill="x")
+        settings_frame.columnconfigure(1, weight=1)
+
+        ttk.Label(settings_frame, text="Aranacak Kelime:").grid(row=0, column=0, sticky="w", padx=10, pady=5)
+        self.search_term_entry = ttk.Entry(settings_frame, width=50, font=('Arial', 10))
+        self.search_term_entry.grid(row=0, column=1, sticky="ew", padx=10, pady=5)
+
+        ttk.Label(settings_frame, text="Arama Dizini:").grid(row=1, column=0, sticky="w", padx=10, pady=5)
+        self.directory_path = tk.StringVar()
+        self.directory_entry = ttk.Entry(settings_frame, textvariable=self.directory_path, width=50, state='readonly', font=('Arial', 10))
+        self.directory_entry.grid(row=1, column=1, sticky="ew", padx=10, pady=5)
+        self.browse_button = ttk.Button(settings_frame, text="Dizin Seç", command=self.browse_directory)
+        self.browse_button.grid(row=1, column=2, padx=10, pady=5)
+
+        self.include_system_files = tk.BooleanVar(value=False)
+        system_files_checkbox = ttk.Checkbutton(settings_frame, text="Sistem Dosyalarını Dahil Et (Yavaşlatabilir)", variable=self.include_system_files, command=self.show_ignored_dirs_info)
+        system_files_checkbox.grid(row=2, column=0, columnspan=3, sticky="w", padx=10, pady=5)
+
+        options_frame = ttk.Frame(settings_frame)
+        options_frame.grid(row=3, column=0, columnspan=3, sticky="w", padx=10, pady=5)
+
+        self.case_sensitive = tk.BooleanVar(value=False)
+        ttk.Checkbutton(options_frame, text="Büyük/Küçük Harfe Dikkat Et", variable=self.case_sensitive).pack(side=tk.LEFT, padx=10)
+
+        self.whole_word = tk.BooleanVar(value=False)
+        ttk.Checkbutton(options_frame, text="Boşluklara Dikkat Et", variable=self.whole_word).pack(side=tk.LEFT, padx=10)
+
+        file_types_frame = ttk.LabelFrame(master, text=" Aranacak Dosya Türleri ")
+        file_types_frame.pack(pady=10, padx=15, fill="x")
+
+        # Uzantılar: En çok kullanılanlar önde, sonra alfabetik olarak diğerleri
+        self.ordered_extensions = [
+            # Çok yaygın doküman ve metin türleri
+            ".txt", ".pdf", ".docx", ".doc", ".xlsx", ".xls", ".pptx", ".ppt", ".csv",
+            # Kod dosyaları
+            ".py", ".html", ".css", ".js", ".json", ".xml", ".md", ".log",
+            ".java", ".c", ".cpp", ".h", ".hpp", ".cs", ".php", ".go", ".rb", ".ts", ".vue",
+            # Yapılandırma ve betik dosyaları
+            ".yml", ".ini", ".conf", ".sh", ".bat", ".ps1", ".vbs", ".sql", ".rtf", ".vb"
+        ]
+
+        # Her bir uzantının başlangıç değeri (varsayılan seçili olanlar)
+        self.file_type_vars = {
+            ".txt": tk.BooleanVar(value=True),
+            ".pdf": tk.BooleanVar(value=True),
+            ".docx": tk.BooleanVar(value=True),
+        }
+        # Diğer uzantılar için varsayılan olarak False ata
+        for ext in self.ordered_extensions:
+            if ext not in self.file_type_vars:
+                self.file_type_vars[ext] = tk.BooleanVar(value=False)
+
+        # Uzantıları 5 satırlı matris şeklinde yerleştirme
+        max_rows = 5
+        row = 0
+        col = 0
+        for ext in self.ordered_extensions:
+            var = self.file_type_vars[ext]
+            cb = ttk.Checkbutton(file_types_frame, text=ext, variable=var)
+            cb.grid(row=row, column=col, sticky="w", padx=8, pady=2)
+            row += 1
+            if row >= max_rows: # 5 satırı tamamlayınca yeni sütuna geç
+                row = 0
+                col += 1
+
+        self.search_button = ttk.Button(master, text="Aramayı Başlat", command=self.start_search,
+                                        style='Search.TButton')
+        self.style.configure('Search.TButton', font=('Arial', 12, 'bold'), foreground='white', background='#4CAF50')
+        self.style.map('Search.TButton',
+                       background=[('active', '#45a049')])
+        self.search_button.pack(pady=15, ipadx=20, ipady=10)
+
+        self.results_text = scrolledtext.ScrolledText(master, width=95, height=20, wrap=tk.WORD,
+                                                    font=('Arial', 9), bg='#f8f8f8', fg='#333333',
+                                                    borderwidth=2, relief="groove")
+        self.results_text.pack(pady=5, padx=15)
+
+        self.search_results_detailed = defaultdict(lambda: defaultdict(list))
+
+        self.ignored_system_dirs = [
+            '$RECYCLE.BIN', 'System Volume Information', '$WinPEDriver$', 'Recovery',
+            'Windows', 'Program Files', 'Program Files (x86)', 'ProgramData',
+            '$WINDOWS.~BT', '$WINDOWS.~WS', 'PerfLogs', 'MSOCache', 'AppData',
+            'Users\\Default', 'ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\Startup'
+        ]
+        self.ignored_dev_dirs = ['.git', '.vscode', '__pycache__', 'node_modules', 'venv', '.idea', '.DS_Store', 'target', 'dist', 'build']
+
+
+    def show_ignored_dirs_info(self):
+        if not self.include_system_files.get():
+            messagebox.showinfo("Bilgi", 
+                                "Sistem dosyaları dahil edilmediğinde aşağıdaki dizinler ve benzerleri atlanacaktır:\n\n" +
+                                "\n".join(self.ignored_system_dirs) + "\n\n" +
+                                "Ayrıca geliştirme ortamı dizinleri de (örn: .git, node_modules) atlanır.")
+        else:
+            messagebox.showinfo("Bilgi", "Tüm sistem ve geliştirme ortamı dizinleri aranacaktır. Bu işlem uzun sürebilir ve erişim hatalarına neden olabilir.")
+
+
+    def browse_directory(self):
+        directory = filedialog.askdirectory()
+        if directory:
+            self.directory_path.set(directory)
+
+    def update_status(self, message, tag=None):
+        self.results_text.insert(tk.END, message + "\n", tag)
+        self.results_text.see(tk.END)
+        self.master.update_idletasks()
+
+    def start_search(self):
+        search_term = self.search_term_entry.get()
+        start_dir = self.directory_path.get()
+
+        selected_file_types = set()
+        for ext, var in self.file_type_vars.items():
+            if var.get():
+                selected_file_types.add(ext)
+                if ext == ".docx": selected_file_types.add(".doc")
+                elif ext == ".xlsx": selected_file_types.add(".xls")
+                elif ext == ".pptx": selected_file_types.add(".ppt")
+
+        if not search_term or not start_dir:
+            messagebox.showwarning("Uyarı", "Lütfen aranacak kelimeyi ve arama dizinini belirtin.")
+            return
+
+        self.results_text.delete(1.0, tk.END)
+        self.search_results_detailed.clear()
+
+        self.update_status(f"[{datetime.datetime.now().strftime('%H:%M:%S')}] Arama başlatılıyor...", "info")
+        self.update_status(f"Aranan Kelime: '{search_term}'")
+        self.update_status(f"Arama Dizini: '{start_dir}'")
+        self.update_status(f"Aranacak Dosya Türleri: {', '.join(sorted(list(selected_file_types)))}\n")
+
+        self.perform_search(search_term, start_dir, selected_file_types)
+
+        self.display_results()
+        self.ask_to_save_results()
+        self.update_status(f"\n[{datetime.datetime.now().strftime('%H:%M:%S')}] Arama tamamlandı.", "info")
+
+
+    def perform_search(self, search_term, start_dir, selected_file_types):
+
+        ignored_all_dirs = []
+        if not self.include_system_files.get():
+            ignored_all_dirs_lower = [x.lower() for x in (self.ignored_system_dirs + self.ignored_dev_dirs)]
+
+        search_pattern = re.escape(search_term)
+        if self.whole_word.get():
+            search_pattern = r'\b' + search_pattern + r'\b'
+
+        flags = 0
+        if not self.case_sensitive.get():
+            flags = re.IGNORECASE
+
+        for root, dirs, files in os.walk(start_dir, topdown=True):
+            if not self.include_system_files.get():
+                dirs[:] = [d for d in dirs if d.lower() not in ignored_all_dirs_lower]
+
+
+            for file in files:
+                file_path = os.path.join(root, file)
+                file_extension = os.path.splitext(file)[1].lower()
+
+                if file_extension not in selected_file_types:
+                    continue
+
+                if re.search(search_pattern, file_path, flags):
+                    if "Klasör/Dosya Adı Eşleşmeleri" not in self.search_results_detailed[file_path]:
+                        self.search_results_detailed[file_path]["Klasör/Dosya Adı Eşleşmeleri"].append(("Dosya Adı", "", 1))
+
+                try:
+                    if file_extension in [
+                        ".txt", ".py", ".json", ".csv", ".html", ".xml", ".log", ".md", ".js", ".css", ".vue", ".ts", 
+                        ".php", ".java", ".c", ".cpp", ".h", ".hpp", ".go", ".rb", ".sh", ".yml", ".ini", ".conf",
+                        ".ps1", ".bat", ".vb", ".cs", ".sql", ".rtf", ".vbs"
+                    ]:
+                        with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                            for i, line in enumerate(f):
+                                matches = list(re.finditer(search_pattern, line, flags))
+                                if matches:
+                                    self.search_results_detailed[file_path]["Dosya İçeriği Eşleşmeleri"].append((i + 1, len(matches)))
+                        # PDF, DOCX, XLSX, PPTX kütüphane gerektiren kısımlar burada
+                        # elif file_extension == ".pdf":
+                        #     reader = PdfReader(file_path)
+                        #     for page_num, page in enumerate(reader.pages):
+                        #         page_text = page.extract_text() or ""
+                        #         matches = list(re.finditer(search_pattern, page_text, flags))
+                        #         if matches:
+                        #             self.search_results_detailed[file_path]["Dosya İçeriği Eşleşmeleri"].append((f"Sayfa {page_num+1}", len(matches)))
+                        # elif file_extension in [".doc", ".docx"]:
+                        #     document = Document(file_path)
+                        #     for para_num, para in enumerate(document.paragraphs):
+                        #         matches = list(re.finditer(search_pattern, para.text, flags))
+                        #         if matches:
+                        #             self.search_results_detailed[file_path]["Dosya İçeriği Eşleşmeleri"].append((f"Paragraf {para_num+1}", len(matches)))
+                        # elif file_extension in [".xls", ".xlsx"]:
+                        #     workbook = load_workbook(file_path)
+                        #     for sheet_name in workbook.sheetnames:
+                        #         sheet = workbook[sheet_name]
+                        #         for row_idx, row in enumerate(sheet.iter_rows()):
+                        #             row_content = " ".join([str(cell.value) for cell in row if cell.value is not None])
+                        #             matches = list(re.finditer(search_pattern, row_content, flags))
+                        #             if matches:
+                        #                 self.search_results_detailed[file_path]["Dosya İçeriği Eşleşmeleri"].append((f"Sayfa: {sheet_name}, Satır: {row_idx+1}", len(matches)))
+                        # elif file_extension in [".ppt", ".pptx"]:
+                        #     # PPTX okuma için python-pptx kütüphanesi gerekli
+                        #     pass 
+
+                except Exception as e:
+                    error_msg = f"Hata ({file_path}): {e}"
+                    if not self.search_results_detailed[file_path]["Hatalar"]: 
+                        self.search_results_detailed[file_path]["Hatalar"].append(("Genel", str(e), 1))
+                    self.update_status(f"[{datetime.datetime.now().strftime('%H:%M:%S')}] Hata oluştu: {self.truncate_path(file_path, 60)} - {e}", "error_msg")
+
+                self.master.update_idletasks()
+
+
+    def display_results(self):
+        self.results_text.delete(1.0, tk.END)
+
+        if not any(self.search_results_detailed.values()):
+            self.results_text.insert(tk.END, "Eşleşen dosya veya içerik bulunamadı.\n")
+            return
+
+        files_with_name_match = sorted([fp for fp, categories in self.search_results_detailed.items() if "Klasör/Dosya Adı Eşleşmeleri" in categories])
+        files_with_content_match = sorted([fp for fp, categories in self.search_results_detailed.items() if "Dosya İçeriği Eşleşmeleri" in categories])
+        files_with_errors = sorted([fp for fp, categories in self.search_results_detailed.items() if "Hatalar" in categories])
+
+        if files_with_name_match:
+            self.results_text.insert(tk.END, f"--- Klasör/Dosya Adı Eşleşmeleri ---\n", "header")
+            for file_path in files_with_name_match:
+                display_path = self.truncate_path(file_path, 80)
+                self.results_text.insert(tk.END, f"  [Dosya Adı]: {display_path}\n", "filename_match")
+            self.results_text.insert(tk.END, "\n")
+
+        if files_with_content_match:
+            self.results_text.insert(tk.END, f"--- Dosya İçeriği Eşleşmeleri ---\n", "header")
+            for file_path in files_with_content_match:
+                display_path = self.truncate_path(file_path, 80)
+
+                is_filename_match = file_path in files_with_name_match
+                if is_filename_match:
+                    self.results_text.insert(tk.END, f"  [Dosya Adı & İçerik]: {display_path}\n", "combined_match")
+                else:
+                    self.results_text.insert(tk.END, f"  [İçerik]: {display_path}\n", "content_match")
+
+                for line_info, count in self.search_results_detailed[file_path]["Dosya İçeriği Eşleşmeleri"]:
+                    self.results_text.insert(tk.END, f"    - {line_info} satırında ({count} kez)\n", "snippet")
+            self.results_text.insert(tk.END, "\n")
+
+        if files_with_errors:
+            self.results_text.insert(tk.END, f"--- Hatalar (Dizin Erişimi / Dosya Okuma) ---\n", "header")
+            for file_path in files_with_errors:
+                display_path = self.truncate_path(file_path, 80)
+                self.results_text.insert(tk.END, f"  [Hata]: {display_path}\n", "error_msg")
+                for error_type, error_msg, _ in self.search_results_detailed[file_path]["Hatalar"]:
+                    self.results_text.insert(tk.END, f"    - Mesaj: {error_msg}\n", "error_msg")
+            self.results_text.insert(tk.END, "\n")
+
+
+        self.results_text.tag_config("header", font=("Arial", 11, "bold"), foreground="#0056b3")
+        self.results_text.tag_config("filename_match", foreground="#333333")
+        self.results_text.tag_config("content_match", foreground="#007bff")
+        self.results_text.tag_config("combined_match", foreground="#28a745", font=('Arial', 9, 'bold'))
+        self.results_text.tag_config("snippet", foreground="#555555", font=('Arial', 8, 'italic'))
+        self.results_text.tag_config("error_msg", foreground="red", font=('Arial', 9, 'italic'))
+        self.results_text.tag_config("info", foreground="#6c757d", font=('Arial', 9, 'italic'))
+
+        self.results_text.insert(tk.END, f"\nArama tamamlandı. Toplam {len(files_with_name_match) + len(files_with_content_match)} eşleşme (hatalar hariç) bulundu.")
+
+
+    def truncate_path(self, path, length=80):
+        if len(path) <= length:
+            return path
+        parts = path.split(os.sep)
+        if len(parts) == 1:
+             return f"...{path[-(length-3):]}"
+        if len(parts) > 4: 
+            start_part = os.sep.join(parts[:2])
+            end_part = os.sep.join(parts[-2:])
+            if len(start_part) + 3 + len(end_part) < length:
+                return f"{start_part}{os.sep}...{os.sep}{end_part}"
+            else:
+                return f"...{os.sep.join(parts[-3:])}" 
+        return f"...{path[-(length-3):]}"
+
+
+    def ask_to_save_results(self):
+        if not any(self.search_results_detailed.values()):
+            return
+
+        response = messagebox.askyesno("Sonuçları Kaydet", "Arama sonuçlarını kaydetmek ister misiniz?")
+        if response: 
+            self.save_results()
+
+    def save_results(self):
+        search_term = self.search_term_entry.get()
+        default_filename = f"Arama_Sonuclari_{search_term}_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.txt".replace(" ", "_").replace(":", "").replace("-", "")
+        desktop_path = os.path.join(os.path.expanduser("~"), "Desktop")
+
+        file_path = filedialog.asksaveasfilename(defaultextension=".txt",
+                                                initialfile=default_filename,
+                                                initialdir=desktop_path,
+                                                filetypes=[("Metin Dosyaları", "*.txt"),
+                                                           ("Tüm Dosyalar", "*.*")])
+        if file_path:
+            try:
+                with open(file_path, 'w', encoding='utf-8') as f:
+                    f.write(f"--- Arama Sonuçları ({datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}) ---\n")
+                    f.write(f"Aranan Kelime: '{self.search_term_entry.get()}'\n")
+                    f.write(f"Arama Dizini: '{self.directory_path.get()}'\n")
+                    f.write(f"Büyük/Küçük Harf Duyarlı: {'Evet' if self.case_sensitive.get() else 'Hayır'}\n")
+                    f.write(f"Boşluklara Dikkat Et: {'Evet' if self.whole_word.get() else 'Hayır'}\n")
+                    f.write(f"Sistem Dosyaları Dahil Edildi: {'Evet' if self.include_system_files.get() else 'Hayır'}\n")
+                    f.write("--------------------------------------------------\n\n")
+
+                    match_number = 1
+
+                    all_found_files = sorted(list(self.search_results_detailed.keys()))
+
+                    for file_path in all_found_files:
+                        categories = self.search_results_detailed[file_path]
+
+                        f.write(f"{match_number}. Eşleşme:\n")
+                        f.write(f"   Dosya Yolu: {file_path}\n")
+
+                        if "Klasör/Dosya Adı Eşleşmeleri" in categories:
+                            f.write("   Kategori: Klasör/Dosya Adı Eşleşmesi\n")
+
+                        if "Dosya İçeriği Eşleşmeleri" in categories:
+                            f.write("   Kategori: Dosya İçeriği Eşleşmesi\n")
+                            for line_info, count in categories["Dosya İçeriği Eşleşmeleri"]:
+                                f.write(f"     - Satır: {line_info}, Tekrar: {count}\n")
+
+                        if "Hatalar" in categories:
+                            f.write("   Kategori: Hata\n")
+                            for error_type, error_msg, _ in categories["Hatalar"]:
+                                f.write(f"     - Hata Mesajı: {error_msg}\n")
+                        f.write("\n")
+                        match_number += 1
+
+                    f.write(f"--- Arama Sonu - Toplam {match_number - 1} eşleşme (hatalar dahil) ---")
+                messagebox.showinfo("Başarılı", "Sonuçlar başarıyla kaydedildi!")
+            except Exception as e:
+                messagebox.showerror("Hata", f"Sonuçlar kaydedilirken bir hata oluştu: {e}")
+
+
+if __name__ == "__main__":
+    root = tk.Tk()
+    app = FileSearchApp(root)
+    root.mainloop()
